@@ -11,7 +11,7 @@ import { TodoDialog } from "@/components/todos/todo-dialog";
 import { createClient } from "@/lib/supabase/client";
 import type { Todo, TodoPriority, TodoStatus } from "@/types/database";
 
-type ProfileInfo = { full_name: string | null; email: string | null; avatar_url: string | null } | null;
+type ProfileInfo = { full_name: string | null; email: string | null; phone?: string | null; avatar_url: string | null } | null;
 const statuses: TodoStatus[] = ["TODO", "IN_PROGRESS", "COMPLETED"];
 const priorities: TodoPriority[] = ["LOW", "MEDIUM", "HIGH"];
 const statusLabel: Record<TodoStatus, string> = { TODO: "Todo", IN_PROGRESS: "In Progress", COMPLETED: "Completed" };
@@ -94,7 +94,7 @@ export function Dashboard({ initialProfile, initialTodos, initialTodosError, ema
       <Link href="/dashboard" className="brand"><span className="brand-mark"><Check size={19} /></span> taskify</Link>
       <p className="nav-caption">WORKSPACE</p>
       <nav className="side-nav" aria-label="Main navigation"><Link href="/dashboard" className="nav-link active"><LayoutDashboard size={18}/> Dashboard</Link><Link href="/profile" className="nav-link"><UserRound size={18}/> Profile</Link></nav>
-      <div className="sidebar-bottom"><div className="mini-user">{initialProfile?.avatar_url ? <Image src={initialProfile.avatar_url} alt="" width={36} height={36} unoptimized/> : <span>{name.slice(0,1).toUpperCase()}</span>}<div><strong>{name}</strong><small>{email}</small></div></div><LogoutButton /></div>
+      <div className="sidebar-bottom"><div className="mini-user">{initialProfile?.avatar_url ? <Image src={initialProfile.avatar_url} alt="" width={36} height={36} unoptimized/> : <span>{name.slice(0,1).toUpperCase()}</span>}<div><strong>{name}</strong><small>{email || initialProfile?.phone || ""}</small></div></div><LogoutButton /></div>
     </aside>
     <main className="dashboard-main">
       <header className="topbar"><span>Workspace / Dashboard</span><Link href="/profile" className="avatar-link" aria-label="Open profile">{initialProfile?.avatar_url ? <Image src={initialProfile.avatar_url} alt="" width={36} height={36} unoptimized/> : name.slice(0,1).toUpperCase()}</Link></header>

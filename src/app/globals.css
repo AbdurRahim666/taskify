@@ -73,6 +73,15 @@ h1 {
   background: #1d4ed8;
 }
 
+.truecaller-auth { margin-top: 0.75rem; }
+.truecaller-button { width:100%; min-height:2.75rem; display:flex; justify-content:center; align-items:center; gap:9px; padding:0 16px; border:1px solid #d8dee9; border-radius:6px; color:#172033; background:#fff; font:inherit; font-weight:650; cursor:pointer; transition:background-color .15s ease,border-color .15s ease; }
+.truecaller-button:hover:not(:disabled) { border-color:#aeb8c8; background:#f8fafc; }
+.truecaller-button:focus-visible { outline:3px solid #93c5fd; outline-offset:2px; }
+.truecaller-button:disabled { cursor:wait; opacity:.65; }
+.truecaller-auth .auth-copy { font-size:12px; }
+.truecaller-support-note { margin:10px 2px 0; color:#697589; font-size:12px; line-height:1.5; }
+.truecaller-auth .form-error { margin-top:.75rem; font-size:12px; }
+
 .google-button:hover:not(:disabled) {
   background: #1e40af;
 }

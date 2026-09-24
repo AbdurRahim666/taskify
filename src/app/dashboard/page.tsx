@@ -9,8 +9,11 @@ export default async function DashboardPage() {
   if (!user) redirect("/login");
   const supabase = await createClient();
   const [{ data: profile }, { data: todos, error }] = await Promise.all([
-    supabase.from("profiles").select("full_name,email,avatar_url").eq("id", user.sub).maybeSingle(),
+    supabase.from("profiles").select("full_name,email,phone,avatar_url").eq("id", user.sub).maybeSingle(),
     supabase.from("todos").select("*").order("created_at", { ascending: false }),
   ]);
-  return <Dashboard initialProfile={profile} initialTodos={todos ?? []} initialTodosError={error?.message ?? null} email={String(user.email ?? "")} />;
+  const rawEmail = String(user.email ?? "");
+  const email = rawEmail.endsWith("@accounts.taskify.invalid") ? "" : rawEmail;
+  const safeProfile = profile ? { ...profile, email: profile.email?.endsWith("@accounts.taskify.invalid") ? null : profile.email } : null;
+  return <Dashboard initialProfile={safeProfile} initialTodos={todos ?? []} initialTodosError={error?.message ?? null} email={email} />;
 }

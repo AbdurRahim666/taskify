@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
+import { TruecallerButton } from "@/components/auth/truecaller-button";
 
 type LoginFormProps = {
   initialError?: string;
@@ -51,6 +52,7 @@ export function LoginForm({ initialError }: LoginFormProps) {
         >
           {isSubmitting ? "Connecting to Google…" : "Continue with Google"}
         </button>
+        <TruecallerButton />
       </section>
     </main>
   );
