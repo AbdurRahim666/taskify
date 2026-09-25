@@ -5,6 +5,13 @@ import type { TruecallerCallback, TruecallerProfile } from "./types";
 const encoder = new TextEncoder();
 const MAX_PROFILE_BYTES = 64 * 1024;
 
+export class TruecallerProfileError extends Error {
+  constructor(readonly category: string, readonly httpStatus?: number) {
+    super(category);
+    this.name = "TruecallerProfileError";
+  }
+}
+
 function base64Url(bytes: Uint8Array) {
   let binary = "";
   bytes.forEach((byte) => (binary += String.fromCharCode(byte)));
@@ -86,13 +93,19 @@ export async function hashIdentity(subject: string) {
 
 function safeEndpoint(endpoint: string) {
   const configuredOrigin = process.env.TRUECALLER_PROFILE_API_ORIGIN;
-  if (!configuredOrigin) throw new Error("Missing Truecaller profile API origin configuration.");
-  const allowed = new URL(configuredOrigin);
-  const requested = new URL(endpoint);
-  if (allowed.protocol !== "https:" || requested.protocol !== "https:" || requested.origin !== allowed.origin || requested.username || requested.password || requested.port) {
-    throw new Error("Truecaller returned a disallowed profile endpoint.");
+  if (!configuredOrigin) throw new TruecallerProfileError("profile_origin_missing");
+  let allowed: URL;
+  let requested: URL;
+  try {
+    allowed = new URL(configuredOrigin);
+    requested = new URL(endpoint);
+  } catch {
+    throw new TruecallerProfileError("profile_endpoint_invalid");
   }
-  if (!requested.pathname.startsWith("/v1/")) throw new Error("Truecaller returned an invalid profile endpoint.");
+  if (allowed.protocol !== "https:" || requested.protocol !== "https:" || requested.origin !== allowed.origin || requested.username || requested.password || requested.port) {
+    throw new TruecallerProfileError("profile_origin_mismatch");
+  }
+  if (!requested.pathname.startsWith("/v1/")) throw new TruecallerProfileError("profile_path_invalid");
   return requested.toString();
 }
 
@@ -103,14 +116,14 @@ export async function fetchProfile(endpoint: string, accessToken: string): Promi
     redirect: "error",
     signal: AbortSignal.timeout(8000),
   });
-  if (!response.ok) throw new Error("Truecaller profile verification failed.");
+  if (!response.ok) throw new TruecallerProfileError("profile_http_error", response.status);
   const declaredLength = Number(response.headers.get("content-length") ?? 0);
-  if (declaredLength > MAX_PROFILE_BYTES) throw new Error("Truecaller profile response was too large.");
+  if (declaredLength > MAX_PROFILE_BYTES) throw new TruecallerProfileError("profile_response_too_large");
   const text = await response.text();
-  if (text.length > MAX_PROFILE_BYTES) throw new Error("Truecaller profile response was too large.");
+  if (text.length > MAX_PROFILE_BYTES) throw new TruecallerProfileError("profile_response_too_large");
   let value: unknown;
-  try { value = JSON.parse(text); } catch { throw new Error("Truecaller returned an invalid profile response."); }
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Truecaller returned an invalid profile response.");
+  try { value = JSON.parse(text); } catch { throw new TruecallerProfileError("profile_json_invalid"); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TruecallerProfileError("profile_shape_invalid");
   const profile = value as Record<string, unknown>;
   const rawName = profile.name && typeof profile.name === "object" ? profile.name as Record<string, unknown> : {};
   const online = profile.onlineIdentities && typeof profile.onlineIdentities === "object" ? profile.onlineIdentities as Record<string, unknown> : {};
@@ -118,7 +131,7 @@ export async function fetchProfile(endpoint: string, accessToken: string): Promi
     ? profile.phoneNumbers.filter((phone): phone is string => typeof phone === "string" && phone.length <= 32)
     : [];
   const id = [profile.userId, profile.id].find((item) => typeof item === "string" || typeof item === "number");
-  if (id === undefined || !phoneNumbers.length) throw new Error("Truecaller did not return a usable verified identity.");
+  if (id === undefined || !phoneNumbers.length) throw new TruecallerProfileError("profile_identity_incomplete");
   const name = {
     ...(typeof rawName.first === "string" ? { first: rawName.first.slice(0, 120) } : {}),
     ...(typeof rawName.last === "string" ? { last: rawName.last.slice(0, 120) } : {}),

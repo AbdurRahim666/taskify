@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { decryptAccessToken, fetchProfile, hashIdentity, isValidNonce, profileFullName, sha256 } from "@/lib/truecaller/server";
+import { decryptAccessToken, fetchProfile, hashIdentity, isValidNonce, profileFullName, sha256, TruecallerProfileError } from "@/lib/truecaller/server";
 import type { TruecallerAttemptStatus } from "@/lib/truecaller/types";
 
 export const runtime = "nodejs";
@@ -116,16 +116,21 @@ export async function POST(request: NextRequest) {
   if (claimError) return NextResponse.json({ error: "Unable to process sign-in." }, { status: 500 });
   if (!claimed) return statusResponse("processing");
 
+  let processingStep = "token_decryption";
   try {
     const accessToken = await decryptAccessToken(attempt.encrypted_access_token);
+    processingStep = "profile_request";
     const profile = await fetchProfile(attempt.profile_endpoint, accessToken);
     const subject = String(profile.userId ?? profile.id ?? "");
     if (!subject) throw new Error("Missing verified identity.");
+    processingStep = "identity_hash";
     const identityHash = await hashIdentity(subject);
+    processingStep = "identity_lookup_or_create";
     const userId = await findOrCreateUser(identityHash, profile);
     const verifiedPhone = profile.phoneNumbers?.[0];
     if (!verifiedPhone) throw new Error("Missing verified phone number.");
 
+    processingStep = "profile_write";
     const { error: profileError } = await admin.from("profiles").upsert({
       id: userId,
       email: null,
@@ -135,20 +140,24 @@ export async function POST(request: NextRequest) {
     }, { onConflict: "id" });
     if (profileError) throw new Error("Unable to update the verified profile.");
 
+    processingStep = "auth_user_lookup";
     const { data: authUser, error: authUserError } = await admin.auth.admin.getUserById(userId);
     if (authUserError || !authUser.user.email || authUser.user.user_metadata?.auth_provider !== "truecaller") {
       throw new Error("Unable to establish a Taskify session.");
     }
+    processingStep = "magic_link_generation";
     const { data: link, error: linkError } = await admin.auth.admin.generateLink({ type: "magiclink", email: authUser.user.email });
     const tokenHash = link?.properties?.hashed_token;
     if (linkError || !tokenHash) throw new Error("Unable to establish a Taskify session.");
 
     // Consume the one-time admin-generated link through the regular SSR client.
     // This stores the ordinary Supabase session in the existing auth cookies.
+    processingStep = "session_verification";
     const supabase = await createClient();
     const { error: verifyError } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: "email" });
     if (verifyError) throw new Error("Unable to establish a Taskify session.");
 
+    processingStep = "attempt_completion";
     const { error: cleanupError } = await admin.from("truecaller_login_attempts").update({
       status: "complete",
       encrypted_access_token: null,
@@ -159,13 +168,28 @@ export async function POST(request: NextRequest) {
     const response = statusResponse("complete");
     response.cookies.set(`tc_binding_${nonce}`, "", { httpOnly: true, secure: request.nextUrl.protocol === "https:", sameSite: "lax", path: "/api/auth/truecaller/status", maxAge: 0 });
     return response;
-  } catch {
-    await admin.from("truecaller_login_attempts").update({
+  } catch (caught) {
+    const category = caught instanceof TruecallerProfileError ? caught.category : "processing_error";
+    const httpStatus = caught instanceof TruecallerProfileError ? caught.httpStatus : undefined;
+    console.error("Truecaller status processing failed", {
+      step: processingStep,
+      category,
+      ...(httpStatus === undefined ? {} : { httpStatus }),
+      attemptState: "processing",
+    });
+    const { error: failureStateError } = await admin.from("truecaller_login_attempts").update({
       status: "failed",
       encrypted_access_token: null,
       profile_endpoint: null,
       consumed_at: new Date().toISOString(),
     }).eq("id", attempt.id).eq("status", "processing");
+    if (failureStateError) {
+      console.error("Truecaller failure state update failed", {
+        step: "attempt_failure_transition",
+        category: "database_update_error",
+        attemptState: "processing",
+      });
+    }
     return statusResponse("failed");
   }
 }
