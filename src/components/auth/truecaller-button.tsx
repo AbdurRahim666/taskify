@@ -8,6 +8,9 @@ type PollResponse = { status?: string; error?: string };
 
 const POLL_INTERVAL_MS = 1500;
 const FLOW_TIMEOUT_MS = 2 * 60 * 1000;
+const ATTEMPT_REFRESH_MS = 4 * 60 * 1000;
+const ATTEMPT_LIFETIME_MS = 5 * 60 * 1000;
+const ATTEMPT_REFRESH_CHECK_MS = 15 * 1000;
 function makeDeepLink({ nonce, partnerKey, partnerName }: StartResponse) {
   const query = new URLSearchParams({ type: "btmsheet", requestNonce: nonce, partnerKey, partnerName });
   return `truecallersdk://truesdk/web_verify?${query.toString()}`;
@@ -18,8 +21,11 @@ export function TruecallerButton() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState<StartResponse | null>(null);
   const attemptRef = useRef<StartResponse | null>(null);
   const attemptStartedAt = useRef(0);
+  const preparingRef = useRef<Promise<void> | null>(null);
+  const mountedRef = useRef(false);
 
   // User-agent detection only controls whether we start the flow. It never
   // controls whether the button is rendered and does not detect app presence.
@@ -27,8 +33,10 @@ export function TruecallerButton() {
 
   useEffect(() => {
     if (!supported) return;
-    let active = true;
-    async function prepare() {
+    mountedRef.current = true;
+    function prepare() {
+      if (preparingRef.current) return preparingRef.current;
+      const request = (async () => {
       try {
         const response = await fetch("/api/auth/truecaller/start", {
           method: "POST",
@@ -38,16 +46,37 @@ export function TruecallerButton() {
         });
         const result = await response.json() as StartResponse;
         if (!response.ok || !result.nonce || !result.partnerKey) throw new Error(result.error || "Unable to prepare Truecaller sign-in.");
-        if (active) {
+        if (mountedRef.current) {
           attemptRef.current = result;
+          setAttempt(result);
           attemptStartedAt.current = Date.now();
+          setError("");
         }
       } catch (caught) {
-        if (active) setError(caught instanceof Error ? caught.message : "Unable to prepare Truecaller sign-in.");
+        if (mountedRef.current) setError(caught instanceof Error ? caught.message : "Unable to prepare Truecaller sign-in.");
       }
+      })();
+      preparingRef.current = request;
+      void request.finally(() => {
+        if (preparingRef.current === request) preparingRef.current = null;
+      });
+      return request;
     }
     void prepare();
-    return () => { active = false; };
+    const refreshTimer = window.setInterval(() => {
+      if (Date.now() - attemptStartedAt.current >= ATTEMPT_REFRESH_MS) void prepare();
+    }, ATTEMPT_REFRESH_CHECK_MS);
+    const expiryTimer = window.setInterval(() => {
+      if (Date.now() - attemptStartedAt.current >= ATTEMPT_LIFETIME_MS) {
+        attemptRef.current = null;
+        setAttempt(null);
+      }
+    }, ATTEMPT_REFRESH_CHECK_MS);
+    return () => {
+      mountedRef.current = false;
+      window.clearInterval(refreshTimer);
+      window.clearInterval(expiryTimer);
+    };
   }, [supported]);
 
   async function poll(nonce: string) {
@@ -74,38 +103,23 @@ export function TruecallerButton() {
     throw new Error("Sign-in timed out. Please try again or continue with Google.");
   }
 
-  async function handleClick() {
+  function handleClick() {
     setError("");
     if (!supported) {
       return;
     }
 
-    let current = attemptRef.current;
-    if (!current || Date.now() - attemptStartedAt.current > 4 * 60 * 1000) {
-      setBusy(true);
-      try {
-        const response = await fetch("/api/auth/truecaller/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: "{}",
-          cache: "no-store",
-        });
-        const result = await response.json() as StartResponse;
-        if (!response.ok || !result.nonce || !result.partnerKey) throw new Error(result.error || "Unable to prepare Truecaller sign-in.");
-        current = result;
-        attemptRef.current = result;
-        attemptStartedAt.current = Date.now();
-      } catch (caught) {
-        setBusy(false);
-        setError(caught instanceof Error ? caught.message : "Unable to prepare Truecaller sign-in.");
-        return;
-      }
+    const current = attemptRef.current;
+    const age = Date.now() - attemptStartedAt.current;
+    if (!current || age >= ATTEMPT_LIFETIME_MS) {
+      attemptRef.current = null;
+      setAttempt(null);
+      setMessage("Truecaller is still preparing. Please try again.");
+      return;
     }
-    if (!current) return;
 
     setBusy(true);
     setMessage("Opening Truecaller...");
-    attemptStartedAt.current = Date.now();
     // Launch the custom scheme from the user's tap on supported Android.
     window.location.href = makeDeepLink(current);
     void poll(current.nonce).catch((caught: unknown) => {
@@ -118,9 +132,9 @@ export function TruecallerButton() {
 
   return (
     <div className="truecaller-auth">
-      <button className="truecaller-button" disabled={busy || supported !== true} onClick={handleClick} type="button">
+      <button className="truecaller-button" disabled={busy || supported !== true || !attempt} onClick={handleClick} type="button">
         <Smartphone size={18} aria-hidden="true" />
-        {busy ? "Waiting for Truecaller..." : supported === null ? "Preparing Truecaller..." : "Continue with Truecaller"}
+        {busy ? "Waiting for Truecaller..." : supported === null || (supported && !attempt) ? "Preparing Truecaller..." : "Continue with Truecaller"}
       </button>
       {supported === false ? (
         <p className="truecaller-support-note" aria-live="polite" role="status">
