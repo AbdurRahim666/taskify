@@ -131,6 +131,12 @@ export async function fetchProfile(endpoint: string, accessToken: string): Promi
     ? profile.phoneNumbers.filter((phone): phone is string => typeof phone === "string" && phone.length <= 32)
     : [];
   const id = [profile.userId, profile.id].find((item) => typeof item === "string" || typeof item === "number");
+  console.info("Truecaller profile shape", {
+    hasId: typeof profile.id === "string" || typeof profile.id === "number",
+    hasUserId: typeof profile.userId === "string" || typeof profile.userId === "number",
+    phoneNumberCount: phoneNumbers.length,
+    hasName: Boolean(profile.name && typeof profile.name === "object" && !Array.isArray(profile.name)),
+  });
   if (id === undefined || !phoneNumbers.length) throw new TruecallerProfileError("profile_identity_incomplete");
   const name = {
     ...(typeof rawName.first === "string" ? { first: rawName.first.slice(0, 120) } : {}),
